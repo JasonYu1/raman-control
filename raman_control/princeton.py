@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import ctypes
@@ -19,20 +20,20 @@ from System import *  # noqa
 from System.Collections.Generic import List  # noqa
 from System.Runtime.InteropServices import GCHandle, GCHandleType  # noqa
 
+
 from .calibration import CoordTransformer
 from .daq import DaqController
 from .utils import make_grid
+# Add needed dll references
+sys.path.append(os.environ["LIGHTFIELD_ROOT"])
+sys.path.append(os.environ["LIGHTFIELD_ROOT"] + "\\AddInViews")
+clr.AddReference("PrincetonInstruments.LightFieldViewV5")
+clr.AddReference("PrincetonInstruments.LightField.AutomationV5")
+clr.AddReference("PrincetonInstruments.LightFieldAddInSupportServices")
 
-# # Add needed dll references
-# sys.path.append(os.environ["LIGHTFIELD_ROOT"])
-# sys.path.append(os.environ["LIGHTFIELD_ROOT"] + "\\AddInViews")
-# clr.AddReference("PrincetonInstruments.LightFieldViewV5")
-# clr.AddReference("PrincetonInstruments.LightField.AutomationV5")
-# clr.AddReference("PrincetonInstruments.LightFieldAddInSupportServices")
 
-
-# from PrincetonInstruments.LightField.AddIns import *  # noqa
-# from PrincetonInstruments.LightField.Automation import *  # noqa
+from PrincetonInstruments.LightField.AddIns import *  # noqa
+from PrincetonInstruments.LightField.Automation import *  # noqa
 
 # fmt: on
 
@@ -44,22 +45,21 @@ class SpectraCollector:
     @classmethod
     def instance(
         cls,
-        # lightFieldConfig: str = "Pixis_2Mhz",
+        lightFieldConfig: str = "Pixis_2Mhz",
         laser_controller: DaqController = None,
         coord_transformer: CoordTransformer = None,
     ) -> SpectraCollector:
         if cls._instance is None:
-            # cls._instance = cls(lightFieldConfig, laser_controller, coord_transformer)
-            cls._instance = cls(laser_controller, coord_transformer)
+            cls._instance = cls(lightFieldConfig, laser_controller, coord_transformer)
         return cls._instance
 
     def __init__(
         self,
-        # lightFieldConfig: str = "Pixis_2MHz",
+        lightFieldConfig: str = "Pixis_2MHz",
         laser_controller: DaqController = None,
         coord_transformer: CoordTransformer = None,
     ) -> None:
-        # self._setup_lightfield(lightFieldConfig)
+        self._setup_lightfield(lightFieldConfig)
         self._daq_controller = laser_controller or DaqController.instance()
         if coord_transformer is None:
             coord_transformer = CoordTransformer.from_json()  # load the default model
@@ -147,61 +147,40 @@ class SpectraCollector:
             arr[i] = self._convert_buffer(frame.GetData(), frame.Format)
         return arr
 
-    # def _setup_lightfield(self, config: str):
-    #     """
-    #     Start and set up lightfield.
-    #     usage
-    #     -----
-    #     auto, experiment, set_value, set_rm_exposure = setup_lightfield()
-    #     """
-    #     # Create the LightField Application (true for visible)
-    #     # The 2nd parameter forces LF to load with no experiment
-    #     auto = Automation(True, List[String]())  # noqa: F405
-    #     experiment = auto.LightFieldApplication.Experiment
-    #     experiment.Load(config)
+    def _setup_lightfield(self, config: str):
+        """
+        Start and set up lightfield.
+        usage
+        -----
+        auto, experiment, set_value, set_rm_exposure = setup_lightfield()
+        """
+        # Create the LightField Application (true for visible)
+        # The 2nd parameter forces LF to load with no experiment
+        auto = Automation(True, List[String]())  # noqa: F405
+        experiment = auto.LightFieldApplication.Experiment
+        experiment.Load(config)
 
-    #     self._auto = auto
-    #     self._experiment = experiment
+        self._auto = auto
+        self._experiment = experiment
 
-    # def _set_value(self, setting, value):
-    #     # Check for existence before setting
-    #     # gain, adc rate, or adc quality
-    #     if self._experiment.Exists(setting):
-    #         self._experiment.SetValue(setting, value)
+    def _set_value(self, setting, value):
+        # Check for existence before setting
+        # gain, adc rate, or adc quality
+        if self._experiment.Exists(setting):
+            self._experiment.SetValue(setting, value)
 
-    # def _get_value(self, setting):
-    #     # Check for existence before setting
-    #     # gain, adc rate, or adc quality
-    #     if self._experiment.Exists(setting):
+    def set_rm_exposure(self, exposure: float):
+        """
+        Sets the exposure time for raman
 
-    #         return self._experiment.GetValue(setting)
-
-    # def set_rm_exposure(self, exposure: float):
-    #     """
-    #     Sets the exposure time for raman
-
-    #     Parameters
-    #     ----------
-    #     exposure : float
-    #         camera exposure in milliseconds
-    #     """
-    #     self._set_value(
-    #         CameraSettings.ShutterTimingExposureTime, float(exposure)  # noqa: F405
-    #     )
-
-    # def get_rm_exposure(self)-> float:
-    #     """
-    #     Get the current exposure time for raman
-
-    #     Returns
-    #     ----------
-    #     exposure : float
-    #         camera exposure in milliseconds
-    #     """
-    #     return self._get_value(
-    #         CameraSettings.ShutterTimingExposureTime  # noqa: F405
-    #     )
-
+        Parameters
+        ----------
+        exposure : float
+            camera exposure in milliseconds
+        """
+        self._set_value(
+            CameraSettings.ShutterTimingExposureTime, float(exposure)  # noqa: F405
+        )
 
     def collect_spectra_relative(self, points, exposure=20):
         """
