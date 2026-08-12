@@ -169,6 +169,71 @@ class AndorSpectraCollector(SpectraCollector):
         self._sdk.SetExposureTime(exposure/1000)
         self._exposure = exposure
 
+    def _configure_read_mode(
+        self,
+        read_mode: str,
+        track_center: int = None,
+        track_height: int = None,
+    ):
+        """Configure the requested readout and return one frame's shape."""
+        valid_modes = {"fvb", "single_track", "image"}
+        if not isinstance(read_mode, str):
+            raise TypeError(
+                "read_mode must be 'fvb', 'single_track', or 'image'"
+            )
+
+        read_mode = read_mode.lower()
+        if read_mode not in valid_modes:
+            raise ValueError(
+                "read_mode must be 'fvb', 'single_track', or 'image'"
+            )
+
+        _, x_pixels, y_pixels = self._sdk.GetDetector()
+        if read_mode == "fvb":
+            self._sdk.SetReadMode(
+                atmcd_codes.Read_Mode.FULL_VERTICAL_BINNING
+            )
+            return (x_pixels,)
+
+        if read_mode == "single_track":
+            if track_center is None or track_height is None:
+                raise ValueError(
+                    "track_center and track_height are required for "
+                    "single_track mode"
+                )
+            if isinstance(track_center, (bool, np.bool_)) or not isinstance(
+                track_center, (int, np.integer)
+            ):
+                raise TypeError("track_center must be an integer")
+            if isinstance(track_height, (bool, np.bool_)) or not isinstance(
+                track_height, (int, np.integer)
+            ):
+                raise TypeError("track_height must be an integer")
+
+            track_center = int(track_center)
+            track_height = int(track_height)
+            if not 0 <= track_center < y_pixels:
+                raise ValueError(
+                    f"track_center must be between 0 and {y_pixels - 1}"
+                )
+            if not 1 < track_height <= y_pixels:
+                raise ValueError(
+                    f"track_height must be between 2 and {y_pixels}"
+                )
+
+            self._sdk.SetReadMode(atmcd_codes.Read_Mode.SINGLE_TRACK)
+            ret = self._sdk.SetSingleTrack(track_center, track_height)
+            if ret != atmcd_errors.Error_Codes.DRV_SUCCESS:
+                raise RuntimeError(
+                    "SetSingleTrack failed for "
+                    f"center={track_center}, height={track_height}: {ret}"
+                )
+            return (x_pixels,)
+
+        self._sdk.SetReadMode(atmcd_codes.Read_Mode.IMAGE)
+        self._sdk.SetImage(1, 1, 1, x_pixels, 1, y_pixels)
+        return (y_pixels, x_pixels)
+
     def collect_spectra_volts(self, volts, exposure: float):
         exposure = exposure / 1000
         volts = np.ascontiguousarray(volts)
@@ -195,13 +260,39 @@ class AndorSpectraCollector(SpectraCollector):
         data = data.reshape(N, 2000)
         return data
 
-    def collect_spectra_pts(self, volts, exposure: float):
+    def collect_spectra_pts(
+        self,
+        volts,
+        exposure: float,
+        read_mode: str = "fvb",
+        track_center: int = None,
+        track_height: int = None,
+    ):
+        """Collect one readout per point using the requested read mode.
+
+        Parameters
+        ----------
+        volts : arraylike
+            Galvo voltages with shape ``(N, 2)``.
+        exposure : float
+            Camera exposure time in milliseconds.
+        read_mode : {"fvb", "single_track", "image"}, default "fvb"
+            FVB and single-track modes return shape ``(N, x_pixels)``.
+            Image mode returns unbinned full-frame data with shape
+            ``(N, y_pixels, x_pixels)``.
+        track_center : int, optional
+            Center detector row for single-track mode.
+        track_height : int, optional
+            Number of adjacent detector rows summed in single-track mode.
+        """
         exposure = exposure / 1000
         volts = np.ascontiguousarray(volts)
         self._daq_controller.prepare_for_collection(np.ascontiguousarray(volts.T))
         N = volts.shape[0]
         self._sdk.SetAcquisitionMode(atmcd_codes.Acquisition_Mode.KINETICS)
-        ret = self._sdk.SetReadMode(atmcd_codes.Read_Mode.FULL_VERTICAL_BINNING)
+        frame_shape = self._configure_read_mode(
+            read_mode, track_center, track_height
+        )
         self._sdk.SetBaselineClamp(0)
         self._sdk.SetPreAmpGain(0)
         self._sdk.SetHSSpeed(0, 2)
@@ -216,18 +307,44 @@ class AndorSpectraCollector(SpectraCollector):
         while self._sdk.GetStatus()[1] == atmcd_errors.Error_Codes.DRV_ACQUIRING:
             time.sleep(0.1)
             print(self._sdk.GetAcquisitionProgress(), end="\r")
-        data_size = N * 2000
+        data_size = int(N * np.prod(frame_shape))
         ret, data = self._sdk.GetAcquiredData(data_size)
-        data = data.reshape(N, 2000)
+        data = data.reshape((N, *frame_shape))
         return data
 
-    def collect_spectra_pts_batch(self, volts, exposure: float):
+    def collect_spectra_pts_batch(
+        self,
+        volts,
+        exposure: float,
+        read_mode: str = "fvb",
+        track_center: int = None,
+        track_height: int = None,
+    ):
+        """Collect a batch readout using the requested read mode.
+
+        Parameters
+        ----------
+        volts : arraylike
+            Galvo voltages with shape ``(N, 2)``.
+        exposure : float
+            Camera exposure time in milliseconds.
+        read_mode : {"fvb", "single_track", "image"}, default "fvb"
+            FVB and single-track modes return shape ``(1, x_pixels)``.
+            Image mode returns unbinned full-frame data with shape
+            ``(1, y_pixels, x_pixels)``.
+        track_center : int, optional
+            Center detector row for single-track mode.
+        track_height : int, optional
+            Number of adjacent detector rows summed in single-track mode.
+        """
         exposure = exposure / 1000
         volts = np.ascontiguousarray(volts)
         self._daq_controller.prepare_for_collection(np.ascontiguousarray(volts.T), batch=True, exposure=exposure)
         N = 1
         self._sdk.SetAcquisitionMode(atmcd_codes.Acquisition_Mode.KINETICS)
-        ret = self._sdk.SetReadMode(atmcd_codes.Read_Mode.FULL_VERTICAL_BINNING)
+        frame_shape = self._configure_read_mode(
+            read_mode, track_center, track_height
+        )
         self._sdk.SetBaselineClamp(0)
         self._sdk.SetPreAmpGain(0)
         self._sdk.SetHSSpeed(0, 2)
@@ -242,9 +359,9 @@ class AndorSpectraCollector(SpectraCollector):
         while self._sdk.GetStatus()[1] == atmcd_errors.Error_Codes.DRV_ACQUIRING:
             time.sleep(0.1)
             print(self._sdk.GetAcquisitionProgress(), end="\r")
-        data_size = N * 2000
+        data_size = int(N * np.prod(frame_shape))
         ret, data = self._sdk.GetAcquiredData(data_size)
-        data = data.reshape(N, 2000)
+        data = data.reshape((N, *frame_shape))
         return data
 
     def close(self):
